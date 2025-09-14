@@ -211,14 +211,19 @@ from flask_jwt_extended import (
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import datetime, os
+import hashlib
+import hmac
+
 
 
 app = Flask(__name__)
 
 
+
 app.config["MONGO_URI"] = "mongodb+srv://railmatrixsih_db_user:CSiHNEUKIInSVvv2@railmatrix.kaguhoo.mongodb.net/railmatrix?retryWrites=true&w=majority"
 app.config["JWT_SECRET_KEY"] = "super-secret"  
 app.config["UPLOAD_FOLDER"] = "uploads"
+
 
 
 mongo = PyMongo(app)
@@ -227,10 +232,13 @@ jwt = JWTManager(app)
 CORS(app)
 
 
+
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
 
+
 jwt_blacklist = set()
+
 
 
 @jwt.token_in_blocklist_loader
@@ -239,14 +247,17 @@ def check_if_token_revoked(jwt_header, jwt_payload):
     return jti in jwt_blacklist
 
 
+
 @app.route("/", methods=["GET"])
 def home():
     return "RailMatrix API is running."
 
 
+
 @app.route('/favicon.ico')
 def favicon():
     return '', 204
+
 
 
 @app.route("/register", methods=["POST"])
@@ -267,6 +278,7 @@ def register():
     return jsonify({"msg": "User registered successfully"}), 201
 
 
+
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -279,6 +291,7 @@ def login():
     return jsonify({"msg": "Invalid credentials"}), 401
 
 
+
 @app.route("/logout", methods=["POST"])
 @jwt_required()
 def logout():
@@ -287,6 +300,7 @@ def logout():
     response = jsonify({"msg": "Logout successful"})
     unset_jwt_cookies(response)
     return response
+
 
 
 @app.route("/defect/upload", methods=["POST"])
@@ -328,6 +342,7 @@ def defect_upload():
     }), 201
 
 
+
 # RETRIEVAL ENDPOINTS
 @app.route("/defects", methods=["GET"])
 @jwt_required()
@@ -340,6 +355,7 @@ def get_all_defects():
         defect["timestamp"] = defect["timestamp"].isoformat()
     
     return jsonify({"defects": defects, "count": len(defects)}), 200
+
 
 
 @app.route("/defects/<record_id>", methods=["GET"])
@@ -357,6 +373,7 @@ def get_defect_by_id(record_id):
         return jsonify({"defect": defect}), 200
     except:
         return jsonify({"msg": "Invalid record ID"}), 400
+
 
 
 @app.route("/stats", methods=["GET"])
@@ -385,6 +402,119 @@ def get_user_stats():
         "by_type": type_stats,
         "by_location": location_stats
     }), 200
+
+
+
+# NEW QR CODE RETRIEVAL ENDPOINT
+@app.route("/qr/retrieve", methods=["POST"])
+@jwt_required()
+def retrieve_qr_details():
+    """
+    Retrieve QR code details using UID and HMAC for verification
+    Expected payload: {"uid": "unique_id", "hmac": "hash_value"}
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'uid' not in data or 'hmac' not in data:
+            return jsonify({"error": "UID and HMAC are required"}), 400
+        
+        uid = data['uid']
+        provided_hmac = data['hmac']
+        
+        # Find QR record by UID
+        qr_record = mongo.db.qr_codes.find_one({"uid": uid})
+        
+        if not qr_record:
+            return jsonify({"error": "QR code not found"}), 404
+        
+        # Verify HMAC (using a secret key for HMAC verification)
+        secret_key = "your-hmac-secret-key-change-in-production"
+        expected_hmac = hmac.new(
+            secret_key.encode(), 
+            uid.encode(), 
+            hashlib.sha256
+        ).hexdigest()
+        
+        if not hmac.compare_digest(provided_hmac, expected_hmac):
+            return jsonify({"error": "Invalid HMAC - Authentication failed"}), 401
+        
+        # Convert ObjectId to string for JSON response
+        qr_record["_id"] = str(qr_record["_id"])
+        if "user_id" in qr_record:
+            qr_record["user_id"] = str(qr_record["user_id"])
+        
+        # Return QR details
+        return jsonify({
+            "status": "success",
+            "qr_details": {
+                "uid": qr_record["uid"],
+                "location": qr_record.get("location", "N/A"),
+                "fitting_type": qr_record.get("fitting_type", "N/A"),
+                "installation_date": qr_record.get("installation_date"),
+                "last_inspection": qr_record.get("last_inspection"),
+                "status": qr_record.get("status", "active"),
+                "metadata": qr_record.get("metadata", {}),
+                "created_at": qr_record.get("created_at"),
+                "updated_at": qr_record.get("updated_at")
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+# BONUS: Create QR Code endpoint (for testing purposes)
+@app.route("/qr/create", methods=["POST"])
+@jwt_required()
+def create_qr_code():
+    """
+    Create a new QR code record for testing
+    """
+    try:
+        current_user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Generate unique UID
+        uid = data.get("uid") or f"QR_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        # Generate HMAC
+        secret_key = "your-hmac-secret-key-change-in-production"
+        hmac_value = hmac.new(
+            secret_key.encode(), 
+            uid.encode(), 
+            hashlib.sha256
+        ).hexdigest()
+        
+        # Create QR record
+        from bson import ObjectId
+        qr_data = {
+            "uid": uid,
+            "hmac": hmac_value,
+            "location": data.get("location", "Default Location"),
+            "fitting_type": data.get("fitting_type", "elastic_clip"),
+            "installation_date": data.get("installation_date", datetime.datetime.utcnow().isoformat()),
+            "last_inspection": None,
+            "status": "active",
+            "metadata": data.get("metadata", {}),
+            "created_by": ObjectId(current_user_id),
+            "created_at": datetime.datetime.utcnow(),
+            "updated_at": datetime.datetime.utcnow()
+        }
+        
+        result = mongo.db.qr_codes.insert_one(qr_data)
+        
+        return jsonify({
+            "message": "QR code created successfully",
+            "qr_id": str(result.inserted_id),
+            "uid": uid,
+            "hmac": hmac_value
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 
 if __name__ == "__main__":
