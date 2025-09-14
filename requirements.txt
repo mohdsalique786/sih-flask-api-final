@@ -1,7 +1,7 @@
 Flask
 flask-pymongo
-gunicorn flask-bcrypt
+flask-bcrypt
 flask-jwt-extended
+flask-cors
 Werkzeug
 gunicorn
-flask-cors
